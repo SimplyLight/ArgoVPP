@@ -1,0 +1,11 @@
+file,status,source_table,purpose
+IV_1_bare_hull_residuary.csv,core,Table IV-1,Bare-hull residuary resistance coefficients vs Froude number
+IV_2_keel_residuary.csv,core,Table IV-2,Keel residuary resistance coefficients vs Froude number
+IV_3_wetted_surface_vs_heel.csv,core,Table IV-3,Change of hull wetted surface with heel
+IV_4_heeled_residuary_delta.csv,core,Table IV-4,Change of hull residuary resistance with heel
+IV_5_effective_span.csv,core,Table IV-5,Effective span/effective draft polynomial coefficients
+VI_1_hazen_1980_sail_coefficients.csv,core for Hazen model,Table VI-1,"Main, jib and spinnaker aerodynamic coefficients"
+VI_2_orc_2023_individual_sails.csv,alternative,Table VI-2,ORC 2023 main and jib coefficients reproduced in the thesis
+VI_3_orc_2023_spinnaker.csv,alternative,Table VI-3,ORC 2023 symmetric/asymmetric spinnaker coefficients reproduced in the thesis
+VI_4_poor_1986_sail_coefficients.csv,alternative,Table VI-4,Poor/IMS main and jib coefficients
+VI_5_poor_1986_spinnaker.csv,alternative,Table VI-5,Poor/IMS spinnaker coefficients

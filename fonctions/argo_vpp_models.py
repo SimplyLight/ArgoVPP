@@ -1,0 +1,117 @@
+from __future__ import annotations
+from .argo_vpp_common import MU_AIR_DEFAULT, MU_WATER_DEFAULT, RHO_AIR_DEFAULT, RHO_WATER_DEFAULT, dataclass, field, pd
+
+@dataclass
+class SimulationCase:
+    project_name: str = "Untitled"
+    variant_name: str = "Baseline"
+    project_path: str = ""
+    A_sail: float = 1.41
+    c_moy: float = 0.588
+    wing_height: float = 1.20
+    h_aero_mode: str = "Auto"
+    h_aero_manual: float = 0.60
+    contour_text: str = ""
+    n_bands: int = 12
+    V_TW: float = 10.0
+    V_min_re: float = 1.0
+    V_max_re: float = 20.0
+    rho_air: float = RHO_AIR_DEFAULT
+    mu_air: float = MU_AIR_DEFAULT
+    rho_water: float = RHO_WATER_DEFAULT
+    mu_water: float = MU_WATER_DEFAULT
+    aero_profile: str = "NACA0012"
+    alpha_trim: float = 0.0
+    alpha_case_1: float = 0.0
+    alpha_case_2: float = 5.0
+    alpha_case_3: float = 10.0
+    velocity_case_1: float = 5.0
+    velocity_case_2: float = 10.0
+    velocity_case_3: float = 15.0
+    delta_x_min: float = -0.30
+    delta_x_max: float = 0.30
+    delta_x_steps: int = 61
+    Cx_spy: float = 1.0
+    S_spy: float = 1.0
+    S_wetted: float = 0.42
+    CR_friction: float = 0.003
+    Rcoque_coeff: float = 0.002
+    S_derive: float = 0.20
+    hauteur_quille: float = 1.00
+    m_quille: float = 5.00
+    psi_max: float = 20.0
+    theta_max: float = 45.0
+    n_twa: int = 180
+    n_cap: int = 180
+    tolerance: float = 0.5
+    max_iterations: int = 50
+    stl_path: str = ""
+    stl_unit: str = "m"
+    longitudinal_axis: str = "X"
+    vertical_axis: str = "Z"
+    bow_positive: bool = True
+    vertical_positive_up: bool = True
+    sail_defined: bool = False
+    keel_defined: bool = False
+    rudder_defined: bool = False
+    sail_x: float = 0.0
+    keel_x: float = 0.0
+    rudder_x: float = 0.0
+    keel_position_mode: str = "Auto-fit"
+    keel_position_percent: float = 50.0
+    keel_transverse_offset: float = 0.0
+    keel_vertical_offset: float = 0.0
+    keel_yaw_deg: float = 0.0
+    keel_pitch_deg: float = 0.0
+    rudder_position_mode: str = "Auto-fit"
+    rudder_position_percent: float = 0.0
+    rudder_transverse_offset: float = 0.0
+    rudder_vertical_offset: float = 0.0
+    rudder_pitch_deg: float = 0.0
+    rudder_stern_margin_percent: float = 8.0
+    transverse_offset: float = 0.0
+    vertical_offset: float = 0.0
+    rotation_deg: float = 0.0
+    inclination_deg: float = 0.0
+    keel_root_chord: float = 0.24
+    keel_tip_chord: float = 0.14
+    keel_thickness_ratio: float = 0.12
+    keel_sweep: float = 0.02
+    rudder_root_chord: float = 0.16
+    rudder_tip_chord: float = 0.10
+    rudder_span: float = 0.38
+    rudder_thickness_ratio: float = 0.12
+    rudder_sweep: float = 0.01
+    rudder_angle_deg: float = 0.0
+    show_hull: bool = False
+    show_sail: bool = False
+    show_keel: bool = False
+    show_rudder: bool = False
+    show_axes: bool = True
+    show_grid: bool = True
+    view_mode: str = "shaded"
+
+@dataclass
+class SimulationResults:
+    geometry: pd.DataFrame = field(default_factory=pd.DataFrame)
+    moments: pd.DataFrame = field(default_factory=pd.DataFrame)
+    hydro_appendages: pd.DataFrame = field(default_factory=pd.DataFrame)
+    awa: pd.DataFrame = field(default_factory=pd.DataFrame)
+    true_wind: pd.DataFrame = field(default_factory=pd.DataFrame)
+    checks: list[str] = field(default_factory=list)
+    stale: bool = True
+
+@dataclass
+class GeometryState:
+    hull_loaded: bool = False
+    sail_defined: bool = False
+    keel_defined: bool = False
+    rudder_defined: bool = False
+    hull_valid: bool = False
+    sail_valid: bool = False
+    keel_valid: bool = False
+    rudder_valid: bool = False
+    hull_visible: bool = False
+    sail_visible: bool = False
+    keel_visible: bool = False
+    rudder_visible: bool = False

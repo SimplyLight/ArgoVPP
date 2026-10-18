@@ -1,0 +1,546 @@
+﻿# === CELLULE 7 : POLAIRE V_B(TWA) â€” PROFIL INFINI + MODE HYBRIDE (VOILE vs SPY) ===
+# Calcul: Pour chaque TWA (0-360Â°), trouve V_B tel que F_prop = R_hydro
+# MODE HYBRIDE: Compare VOILE et SPY Ã  chaque TWA, utilise le max(V_B)
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import ipywidgets as widgets
+from IPython.display import display, HTML, clear_output
+
+print("ðŸ“Š Polaire V_B(TWA) â€” Profil infini + MODE HYBRIDE (VOILE/SPY)\n")
+
+# ===== Fonctions pour polaire =====
+
+def calc_aero_simple(V_AW, beta_AW_deg, alpha_trim_deg, polar_tables, A_sail, c_moy, 
+                     TWA_deg, rho_air=1.225, mu_air=1.81e-5):
+    """Calcule Cl, Cd par interpolation simple + forces aÃ©ro (profil INFINI).
+    
+    Formule F_prop: RÃ©fÃ©rentiel bateau (CAP = TWA_deg)
+    F_prop = LÂ·cos(Î±_eff)Â·cos(90-CAP) - DÂ·cos(Î±_eff)Â·cos(90-CAP)
+           = cos(Î±_eff)Â·cos(90-CAP)Â·(L - D)
+    """
+    V_AW = float(V_AW)
+    beta_AW_deg = float(beta_AW_deg)
+    alpha_trim_deg = float(alpha_trim_deg)
+    TWA_deg = float(TWA_deg)
+    
+    # alpha_trim = angle d'attaque visÃ© par rapport au vent apparent
+    alpha_eff_deg = alpha_trim_deg
+    Re = (rho_air * V_AW * c_moy) / mu_air
+    
+    try:
+        coeffs = _interp_coeffs_for_re_alpha(polar_tables, Re, alpha_eff_deg)
+        Cl = float(coeffs.get('Cl', 0.0))
+        Cd = float(coeffs.get('Cd', 0.0))
+    except Exception as e:
+        Cl, Cd = 0.0, 0.0
+    
+    q_dyn = 0.5 * rho_air * V_AW**2
+    L_aero = Cl * q_dyn * A_sail
+    D_aero = Cd * q_dyn * A_sail
+    
+    # Formule F_prop: L*cos((alpha_trim+beta_AW+90)-CAP) - D*cos(CAP-(alpha_trim+beta_AW))
+    angle1 = alpha_trim_deg + beta_AW_deg + 90.0 - TWA_deg
+    angle2 = TWA_deg - alpha_trim_deg - beta_AW_deg
+    F_prop = L_aero * np.cos(np.radians(angle1)) - D_aero * np.cos(np.radians(angle2))
+    
+    return {'F_prop': float(F_prop), 'Cl': float(Cl), 'Cd': float(Cd)}
+
+
+def calc_apparent_wind(V_TW, V_B, TWA_deg):
+    """Calcule vent apparent vectoriel."""
+    V_TW = float(V_TW)
+    V_B = float(V_B)
+    TWA_deg = float(TWA_deg)
+    
+    V_TW_x = 0.0
+    V_TW_y = V_TW
+    
+    angle_rot_rad = np.radians(90.0 - TWA_deg)
+    V_B_x = V_B * np.cos(angle_rot_rad)
+    V_B_y = V_B * np.sin(angle_rot_rad)
+    
+    V_AW_x = V_TW_x + V_B_x
+    V_AW_y = V_TW_y + V_B_y
+    V_AW = np.sqrt(V_AW_x**2 + V_AW_y**2)
+    
+    if abs(V_AW_y) < 1e-9:
+        beta_AW_rad = 0.0
+    else:
+        beta_AW_rad = np.arctan(V_AW_x / V_AW_y)
+    
+    beta_AW_deg = np.degrees(beta_AW_rad)
+    
+    return {'V_AW': float(V_AW), 'beta_AW': float(beta_AW_deg)}
+
+
+def calc_hydro_drag(V_B, S_wetted, CR_friction, Rcoque_coeff, rho_water):
+    """Calcule rÃ©sistance hydrodynamique."""
+    V_B = float(V_B)
+    q_dyn_water = 0.5 * rho_water * V_B**2
+    C_R_total = float(CR_friction) + float(Rcoque_coeff)
+    R_hydro = C_R_total * q_dyn_water * S_wetted
+    return float(R_hydro)
+
+
+def solve_equilibrium_7(V_TW, TWA_deg, polar_tables, alpha_trim_deg, A_sail, c_moy,
+                        rho_air, rho_water, S_wetted, CR_friction, Rcoque_coeff,
+                        max_iterations=50, tolerance=0.5, V_B_max_factor=2.0):
+    """RÃ©sout F_prop (VOILE) = R_hydro par dichotomie."""
+    V_TW = float(V_TW)
+    TWA_deg = float(TWA_deg)
+    
+    V_B_min = max(0.1, float(V_TW) * 0.05)
+    V_B_max = float(V_TW) * float(V_B_max_factor)
+    
+    converged = False
+    
+    for it in range(int(max_iterations)):
+        V_B_mid = 0.5 * (V_B_min + V_B_max)
+        
+        aw_info = calc_apparent_wind(V_TW, V_B_mid, TWA_deg)
+        aero_info = calc_aero_simple(aw_info['V_AW'], aw_info['beta_AW'],
+                                     alpha_trim_deg, polar_tables, A_sail, c_moy,
+                                     TWA_deg, rho_air=rho_air)
+        R_hydro = calc_hydro_drag(V_B_mid, S_wetted, CR_friction, Rcoque_coeff, rho_water)
+        
+        F_prop = aero_info['F_prop']
+        error = F_prop - R_hydro
+        
+        if abs(error) < tolerance:
+            converged = True
+            return {'V_B': float(V_B_mid), 'converged': True, 'aw': aw_info, 'mode': 'voile'}
+        
+        if error > 0:
+            V_B_min = V_B_mid
+        else:
+            V_B_max = V_B_mid
+    
+    V_B_solution = 0.5 * (V_B_min + V_B_max)
+    aw_final = calc_apparent_wind(V_TW, V_B_solution, TWA_deg)
+    return {'V_B': float(V_B_solution), 'converged': converged, 'aw': aw_final, 'mode': 'voile'}
+
+
+def calc_spy_equilibrium(V_TW, TWA_deg, rho_air, rho_water, S_wetted, CR_friction, 
+                         Rcoque_coeff, Cx_spy=1.0, S_spy=1.0):
+    """RÃ©sout F_spy = R_hydro pour mode SPY.
+    
+    Formule SPY: F_spy = CxÂ·0.5Â·Ï_airÂ·V_BÂ²Â·S
+    ProjetÃ© sur direction CAP: F_prop_spy = F_spyÂ·|sin(90Â°-CAP)|
+    Ã‰quilibre: F_prop_spy = R_hydro
+    
+    âš ï¸ PLAGE D'ACTIVITÃ‰: SPY n'active QUE entre 90Â° et 270Â° (allures arriÃ¨re)
+    - Ã€ 0Â° (vent de face): SPY = None â†’ utilise VOILE
+    - Ã€ 90Â°-270Â° (arriÃ¨re): SPY actif
+    - Ã€ 270-360Â° (avant/travers): SPY = None â†’ utilise VOILE
+    """
+    V_TW = float(V_TW)
+    TWA_deg = float(TWA_deg)
+    Cx_spy = float(Cx_spy)
+    S_spy = float(S_spy)
+    
+    # *** PLAGE D'ACTIVITÃ‰ SPY: 90Â° Ã  270Â° seulement ***
+    if TWA_deg < 90.0 or TWA_deg > 270.0:
+        return None  # SPY inactif en avant/travers
+    
+    sin_90_CAP = np.sin(np.radians(90.0 - TWA_deg))
+    abs_sin_90_CAP = abs(sin_90_CAP)  # Valeur absolue pour symÃ©trie
+    
+    # SingularitÃ©: vent par le travers (mÃªme dans la plage 90-270)
+    if abs_sin_90_CAP < 0.01:
+        return None
+    
+    V_B_min = 0.1
+    V_B_max = V_TW * 2.0
+    
+    for it in range(50):
+        V_B_mid = 0.5 * (V_B_min + V_B_max)
+        F_spy = Cx_spy * 0.5 * rho_air * V_B_mid**2 * S_spy
+        F_prop_spy = F_spy * abs_sin_90_CAP  # Utiliser valeur absolue
+        R_hydro = calc_hydro_drag(V_B_mid, S_wetted, CR_friction, Rcoque_coeff, rho_water)
+        error = F_prop_spy - R_hydro
+        
+        if abs(error) < 0.5:
+            return {'V_B': float(V_B_mid), 'mode': 'spy'}
+        
+        if error > 0:
+            V_B_min = V_B_mid
+        else:
+            V_B_max = V_B_mid
+    
+    V_B_solution = 0.5 * (V_B_min + V_B_max)
+    return {'V_B': float(V_B_solution), 'mode': 'spy'}
+
+
+def solve_equilibrium_hybrid(V_TW, TWA_deg, polar_tables, alpha_trim_deg, A_sail, c_moy,
+                            rho_air, rho_water, S_wetted, CR_friction, Rcoque_coeff,
+                            Cx_spy=1.0, S_spy=1.0, max_iterations=50, tolerance=0.5, V_B_max_factor=2.0):
+    """RÃ©sout Ã©quilibre HYBRIDE: compare VOILE et SPY, retourne max(V_B)."""
+    # Mode VOILE
+    eq_voile = solve_equilibrium_7(V_TW, TWA_deg, polar_tables, alpha_trim_deg, A_sail, c_moy,
+                                  rho_air, rho_water, S_wetted, CR_friction, Rcoque_coeff,
+                                  max_iterations, tolerance, V_B_max_factor)
+    V_B_voile = eq_voile['V_B'] if eq_voile else 0.0
+    
+    # Mode SPY
+    eq_spy = calc_spy_equilibrium(V_TW, TWA_deg, rho_air, rho_water, S_wetted, CR_friction, 
+                                 Rcoque_coeff, Cx_spy=Cx_spy, S_spy=S_spy)
+    V_B_spy = eq_spy['V_B'] if eq_spy else 0.0
+    
+    # Choisir le meilleur
+    if V_B_spy > V_B_voile:
+        eq_final = eq_spy
+        eq_final['V_B'] = V_B_spy
+        aw_final = calc_apparent_wind(V_TW, V_B_spy, TWA_deg) if V_B_spy > 0 else {'V_AW': 0, 'beta_AW': 0}
+        eq_final['aw'] = aw_final
+    else:
+        eq_final = eq_voile
+        eq_final['V_B'] = V_B_voile
+    
+    eq_final['V_B_voile'] = V_B_voile
+    eq_final['V_B_spy'] = V_B_spy
+    
+    return eq_final
+
+
+def compute_polaire_7(V_TW, profile_file, alpha_trim_deg, A_sail, c_moy,
+                      S_wetted, CR_friction, Rcoque_coeff,
+                      rho_air=1.225, rho_water=1025.0, n_twa=180,
+                      Cx_spy=1.0, S_spy=1.0, use_hybrid=True):
+    """Calcule polaire V_B vs TWA avec mode hybride.
+    
+    MODE HYBRIDE: Compare VOILE vs SPY Ã  chaque TWA.
+    """
+    try:
+        polar_tables = _load_polar_file(profile_file)
+    except Exception as e:
+        print(f"âŒ Erreur chargement polaire: {e}")
+        return None
+    
+    n_calc = (n_twa // 2) + 1
+    TWAs_calc = np.linspace(0, 180, n_calc)
+    rows = []
+    
+    for twa in TWAs_calc:
+        try:
+            if use_hybrid:
+                eq = solve_equilibrium_hybrid(V_TW, twa, polar_tables, alpha_trim_deg, A_sail, c_moy,
+                                             rho_air, rho_water, S_wetted, CR_friction, Rcoque_coeff,
+                                             Cx_spy=Cx_spy, S_spy=S_spy)
+            else:
+                eq = solve_equilibrium_7(V_TW, twa, polar_tables, alpha_trim_deg, A_sail, c_moy,
+                                        rho_air, rho_water, S_wetted, CR_friction, Rcoque_coeff)
+            
+            V_B = eq['V_B']
+            aw = eq.get('aw', {'V_AW': 0, 'beta_AW': 0})
+            vmg = V_B * abs(np.cos(np.radians(twa)))
+            
+            row_dict = {
+                'TWA': float(twa),
+                'V_B': float(V_B),
+                'V_B_voile': float(eq.get('V_B_voile', 0.0)),
+                'V_B_spy': float(eq.get('V_B_spy', 0.0)),
+                'mode': eq.get('mode', 'voile'),
+                'V_AW': float(aw.get('V_AW', 0.0)),
+                'beta_AW': float(aw.get('beta_AW', 0.0)),
+                'VMG': float(vmg),
+                'converged': eq.get('converged', True),
+            }
+            rows.append(row_dict)
+        except Exception as ex:
+            print(f"  âš ï¸  TWA={twa}Â°: {ex}")
+            continue
+    
+    if not rows:
+        return None
+    
+    df_first = pd.DataFrame(rows)
+    
+    # PHASE 2: SymÃ©trie pour 180-360Â°
+    rows_sym = []
+    for _, row in df_first.iterrows():
+        twa_orig = float(row['TWA'])
+        if 0 < twa_orig < 180:
+            row_sym = row.copy()
+            row_sym['TWA'] = 360.0 - twa_orig
+            row_sym['VMG'] = float(row['V_B']) * abs(np.cos(np.radians(360.0 - twa_orig)))
+            rows_sym.append(row_sym)
+    
+    if rows_sym:
+        df_sym = pd.DataFrame(rows_sym)
+        df_polaire = pd.concat([df_first, df_sym], ignore_index=True)
+        df_polaire = df_polaire.sort_values('TWA').reset_index(drop=True)
+    else:
+        df_polaire = df_first
+    
+    return df_polaire
+
+
+# ===== Widgets =====
+
+profile_widget7 = widgets.Dropdown(
+    options=profiles_list if 'profiles_list' in globals() else ['NACA0012'],
+    description='Profil:',
+    style={'description_width': '80px'}
+)
+
+V_TW_widget7 = widgets.FloatText(
+    value=10.0,
+    description='V_TW (m/s):',
+    step=0.5,
+    min=1.0,
+    max=30.0,
+    style={'description_width': '80px'}
+)
+
+alpha_trim_widget7 = widgets.FloatText(
+    value=0.0,
+    description='Î±_trim (deg):',
+    step=0.5,
+    min=-15.0,
+    max=20.0,
+    style={'description_width': '80px'}
+)
+
+A_sail_widget7 = widgets.FloatText(
+    value=A_sail_default if 'A_sail_default' in globals() else 1.0,
+    description='A_sail (mÂ²):',
+    step=0.1,
+    min=0.1,
+    max=10.0,
+    style={'description_width': '80px'}
+)
+
+c_moy_widget7 = widgets.FloatText(
+    value=c_moy_default if 'c_moy_default' in globals() else 0.5,
+    description='cÌ„ (m):',
+    step=0.05,
+    min=0.1,
+    max=2.0,
+    style={'description_width': '80px'}
+)
+
+S_wetted_widget7 = widgets.FloatText(
+    value=S_wetted_default if 'S_wetted_default' in globals() else 1.5,
+    description='S mouillÃ©e (mÂ²):',
+    step=0.1,
+    min=0.1,
+    max=10.0,
+    style={'description_width': '80px'}
+)
+
+CR_friction_widget7 = widgets.FloatText(
+    value=0.003,
+    description='CR friction:',
+    step=0.0001,
+    min=0.001,
+    max=0.01,
+    style={'description_width': '80px'}
+)
+
+Rcoque_coeff_widget7 = widgets.FloatText(
+    value=0.002,
+    description='Rcoque coeff:',
+    step=0.0001,
+    min=0.0,
+    max=0.05,
+    style={'description_width': '80px'}
+)
+
+rho_air_widget7 = widgets.FloatText(
+    value=1.225,
+    description='Ï air (kg/mÂ³):',
+    step=0.01,
+    min=1.0,
+    max=1.3,
+    style={'description_width': '80px'}
+)
+
+rho_water_widget7 = widgets.FloatText(
+    value=1025.0,
+    description='Ï eau (kg/mÂ³):',
+    step=1.0,
+    min=1020.0,
+    max=1030.0,
+    style={'description_width': '80px'}
+)
+
+n_twa_widget7 = widgets.IntSlider(
+    value=180,
+    min=36,
+    max=360,
+    step=36,
+    description='N points TWA:',
+    style={'description_width': '80px'}
+)
+
+Cx_spy_widget7 = widgets.FloatText(
+    value=1.0,
+    description='Cx (SPY):',
+    step=0.1,
+    min=0.1,
+    max=2.0,
+    style={'description_width': '80px'}
+)
+
+S_spy_widget7 = widgets.FloatText(
+    value=1.0,
+    description='S (SPY mÂ²):',
+    step=0.1,
+    min=0.1,
+    max=10.0,
+    style={'description_width': '80px'}
+)
+
+# Bouton & output
+polaire_btn7 = widgets.Button(
+    description='Tracer polaire V_B(TWA)',
+    button_style='success',
+    tooltip='Calculate and plot boat speed polaire',
+    icon='calculator'
+)
+
+out7 = widgets.Output()
+
+
+def _on_polaire7(_):
+    """Callback: calcul et tracÃ© polaire."""
+    with out7:
+        clear_output()
+        try:
+            V_TW = float(V_TW_widget7.value)
+            alpha_trim = float(alpha_trim_widget7.value)
+            profile = str(profile_widget7.value).strip().upper()
+            A_sail = float(A_sail_widget7.value)
+            c_moy = float(c_moy_widget7.value)
+            S_wetted = float(S_wetted_widget7.value)
+            CR_friction = float(CR_friction_widget7.value)
+            Rcoque_coeff = float(Rcoque_coeff_widget7.value)
+            rho_air = float(rho_air_widget7.value)
+            rho_water = float(rho_water_widget7.value)
+            n_twa = int(n_twa_widget7.value)
+            Cx_spy = float(Cx_spy_widget7.value)
+            S_spy = float(S_spy_widget7.value)
+            
+            profile_file = _resolve_profile_file(profile, folder='.')
+            
+            print(f"â³ Calcul polaire V_B(TWA) - MODE HYBRIDE (VOILE/SPY)...")
+            print(f"   Profil: {profile}, Î±_trim={alpha_trim}Â°, V_TW={V_TW:.1f} m/s")
+            print(f"   SPY: Cx={Cx_spy}, S={S_spy:.2f} mÂ²\n")
+            
+            df_polaire = compute_polaire_7(
+                V_TW=V_TW,
+                profile_file=str(profile_file),
+                alpha_trim_deg=alpha_trim,
+                A_sail=A_sail,
+                c_moy=c_moy,
+                S_wetted=S_wetted,
+                CR_friction=CR_friction,
+                Rcoque_coeff=Rcoque_coeff,
+                rho_air=rho_air,
+                rho_water=rho_water,
+                n_twa=n_twa,
+                Cx_spy=Cx_spy,
+                S_spy=S_spy,
+                use_hybrid=True
+            )
+            
+            if df_polaire is None or df_polaire.shape[0] == 0:
+                print("âŒ Polaire vide!")
+                return
+            
+            # Tracer 4 panneaux
+            fig = plt.figure(figsize=(18, 6))
+            
+            # Panel 1: Rose polaire
+            ax1 = plt.subplot(141, projection='polar')
+            TWAs_rad = np.radians(df_polaire['TWA'].values)
+            V_Bs = df_polaire['V_B'].values
+            ax1.plot(TWAs_rad, V_Bs, 'b-', linewidth=2.5)
+            ax1.fill(TWAs_rad, V_Bs, alpha=0.2, color='blue')
+            ax1.set_theta_zero_location('N')
+            ax1.set_theta_direction(-1)
+            ax1.set_title(f'Rose V_B (Î±_trim={alpha_trim}Â°)', fontsize=11, weight='bold')
+            ax1.grid(True, alpha=0.3)
+            
+            # Panel 2: V_B vs TWA (tous)
+            ax2 = plt.subplot(142)
+            ax2.plot(df_polaire['TWA'], df_polaire['V_B_voile'], 'b--', linewidth=1.5, alpha=0.6, label='VOILE')
+            ax2.plot(df_polaire['TWA'], df_polaire['V_B_spy'], 'r--', linewidth=1.5, alpha=0.6, label='SPY')
+            ax2.plot(df_polaire['TWA'], df_polaire['V_B'], 'g-', linewidth=2.5, marker='o', markersize=3, label='MAX (choisi)')
+            idx_max = df_polaire['V_B'].idxmax()
+            V_B_max = df_polaire.loc[idx_max, 'V_B']
+            TWA_max = df_polaire.loc[idx_max, 'TWA']
+            ax2.plot(TWA_max, V_B_max, 'k*', markersize=20, label=f'Max: {V_B_max:.2f} m/s @ {TWA_max:.0f}Â°')
+            ax2.set_xlabel('TWA (deg)', fontsize=10, weight='bold')
+            ax2.set_ylabel('V_B (m/s)', fontsize=10, weight='bold')
+            ax2.set_title('Vitesse bateau (hybride)', fontsize=11, weight='bold')
+            ax2.grid(True, alpha=0.3)
+            ax2.set_xlim(0, 360)
+            ax2.legend(fontsize=8, loc='best')
+            
+            # Panel 3: DiffÃ©rence VOILE vs SPY
+            ax3 = plt.subplot(143)
+            df_polaire['diff'] = df_polaire['V_B_spy'] - df_polaire['V_B_voile']
+            colors = ['red' if x > 0 else 'blue' for x in df_polaire['diff']]
+            ax3.bar(df_polaire['TWA'], df_polaire['diff'], color=colors, alpha=0.6, width=2)
+            ax3.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+            ax3.set_xlabel('TWA (deg)', fontsize=10, weight='bold')
+            ax3.set_ylabel('Î”V_B (SPY - VOILE) m/s', fontsize=10, weight='bold')
+            ax3.set_title('SPY meilleur? (rouge=oui)', fontsize=11, weight='bold')
+            ax3.grid(True, alpha=0.3, axis='y')
+            ax3.set_xlim(0, 360)
+            
+            # Panel 4: VMG vs TWA
+            ax4 = plt.subplot(144)
+            ax4.plot(df_polaire['TWA'], df_polaire['VMG'], 'g-', linewidth=2.5, marker='s', markersize=3, alpha=0.7)
+            idx_vmg = df_polaire['VMG'].idxmax()
+            VMG_max = df_polaire.loc[idx_vmg, 'VMG']
+            TWA_vmg = df_polaire.loc[idx_vmg, 'TWA']
+            ax4.plot(TWA_vmg, VMG_max, 'r*', markersize=20, label=f'Max: {VMG_max:.2f} m/s @ {TWA_vmg:.0f}Â°')
+            ax4.set_xlabel('TWA (deg)', fontsize=10, weight='bold')
+            ax4.set_ylabel('VMG (m/s)', fontsize=10, weight='bold')
+            ax4.set_title('Vitesse utile', fontsize=11, weight='bold')
+            ax4.grid(True, alpha=0.3)
+            ax4.set_xlim(0, 360)
+            ax4.legend(fontsize=10, loc='best')
+            
+            plt.tight_layout()
+            display(fig)
+            plt.close(fig)
+            
+            # Stats
+            n_spy = (df_polaire['mode'] == 'spy').sum()
+            print(f"\nâœ… Polaire calculÃ©e:")
+            print(f"   â€¢ {df_polaire.shape[0]} points")
+            print(f"   â€¢ Mode VOILE: {len(df_polaire) - n_spy} points")
+            print(f"   â€¢ Mode SPY: {n_spy} points ({100*n_spy/len(df_polaire):.1f}%)")
+            print(f"   â€¢ V_B range: {df_polaire['V_B'].min():.2f} Ã  {df_polaire['V_B'].max():.2f} m/s")
+            print(f"   â€¢ VMG max: {VMG_max:.2f} m/s @ TWA={TWA_vmg:.0f}Â°")
+            
+            globals()['polaire_results_7'] = df_polaire
+            
+        except Exception as e:
+            print(f"âŒ Erreur: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+polaire_btn7.on_click(_on_polaire7)
+
+# Afficher interface
+display(widgets.VBox([
+    widgets.HTML('<h3>ðŸ“Š POLAIRE V_B(TWA) â€” MODE HYBRIDE (VOILE/SPY)</h3>'),
+    widgets.HTML('<b>Profil INFINI simple + comparaison SPY</b>'),
+    widgets.HTML(''),
+    widgets.HBox([profile_widget7, V_TW_widget7, alpha_trim_widget7]),
+    widgets.HBox([A_sail_widget7, c_moy_widget7, S_wetted_widget7]),
+    widgets.HBox([CR_friction_widget7, Rcoque_coeff_widget7]),
+    widgets.HBox([rho_air_widget7, rho_water_widget7, n_twa_widget7]),
+    widgets.HBox([Cx_spy_widget7, S_spy_widget7]),
+    widgets.HBox([polaire_btn7]),
+    out7,
+]))
+
+print("âœ“ Cellule 7 prÃªte! (polaire V_B avec mode VOILE/SPY hybride)")

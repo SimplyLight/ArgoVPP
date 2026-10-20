@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import ipywidgets as widgets
+from IPython.display import display
+from types import SimpleNamespace
 from .argo_vpp_nb_appendages import (
     chord_at_span,
 )
 from .argo_vpp_nb_mesh import (
+    available_stl_files,
     immersed_mesh_for_waterline,
+    load_hull_stl,
     surface_area_centroid,
 )
+from .argo_vpp_nb_hydrostatics import compute_hull_hydrostatics
 from .argo_vpp_nb_models import (
     BoatGeometryState,
     C,
@@ -29,7 +37,7 @@ from .argo_vpp_nb_tables import (
     table_domain,
 )
 
-__all__ = ['_bare_hull_formula', '_centerboard_formula', '_component_invalid', '_scale_low_fn', 'bare_hull_residuary', 'centerboard_residuary', 'direct_hull_wetted_surface_delta', 'froude_number', 'ittc_friction_resistance', 'orc_appendage_cf0', 'orc_appendage_viscous', 'rail_under_drag', 'wetted_surface_heel_delta']
+__all__ = ['_bare_hull_formula', '_centerboard_formula', '_component_invalid', '_scale_low_fn', 'bare_hull_residuary', 'centerboard_residuary', 'direct_hull_wetted_surface_delta', 'froude_number', 'ittc_friction_resistance', 'orc_appendage_cf0', 'orc_appendage_viscous', 'rail_under_drag', 'test_rotation_surface_mouillee', 'wetted_surface_heel_delta']
 
 def froude_number(V_B: float, LWL: float, constants: PhysicalConstants = C) -> float:
     """Boat Froude number recalculated for every speed."""
@@ -112,6 +120,115 @@ def direct_hull_wetted_surface_delta(V_B: float, heel_rad: float, state: BoatGeo
     R_delta = ittc_friction_resistance(V_B, state.hydro.LWL, S_WC) - ittc_friction_resistance(V_B, state.hydro.LWL, state.hydro.S_C)
     R_delta = float(R_delta) if np.isfinite(R_delta) else 0.0
     return float(S_WC), R_delta
+
+def test_rotation_surface_mouillee() -> widgets.VBox:
+    """Display an interactive STL test of the direct wetted-area heel calculation."""
+
+    stl_options = available_stl_files()
+    stl = widgets.Dropdown(
+        options=stl_options or [("Aucun STL trouve dans Coques/", "")],
+        description="Coque STL:", layout=widgets.Layout(width="80%"),
+    )
+    unit = widgets.Dropdown(options=["auto", "m", "cm", "mm"], value="auto", description="Unite:")
+    orientation = widgets.Dropdown(
+        options=["x_min = poupe, x_max = proue", "x_min = proue, x_max = poupe"],
+        value="x_min = poupe, x_max = proue", description="Orientation:",
+    )
+    draft = widgets.FloatText(value=0.08, description="Tirant d'eau [m]:")
+    use_mesh_center = widgets.Checkbox(value=True, description="Centre de rotation = centre de la coque")
+    center = [widgets.FloatText(value=0.0, description=f"CG {axis} [m]:") for axis in "xyz"]
+    angle_min = widgets.IntSlider(value=0, min=0, max=60, step=1, description="Gite min [°]:")
+    angle_max = widgets.IntSlider(value=60, min=0, max=60, step=1, description="Gite max [°]:")
+    angle_step = widgets.IntSlider(value=5, min=1, max=15, step=1, description="Pas [°]:")
+    run = widgets.Button(description="Tester la rotation", button_style="primary", icon="play")
+    output = widgets.Output()
+
+    def refresh(_button=None):
+        previous = stl.value
+        options = available_stl_files()
+        stl.options = options or [("Aucun STL trouve dans Coques/", "")]
+        values = [option[1] if isinstance(option, tuple) else option for option in stl.options]
+        stl.value = previous if previous in values else values[0]
+
+    refresh_button = widgets.Button(description="Rafraichir STL", icon="refresh")
+    refresh_button.on_click(refresh)
+
+    def calculate(_button):
+        with output:
+            output.clear_output(wait=True)
+            try:
+                if not stl.value:
+                    raise FileNotFoundError("Aucun STL disponible dans le dossier Coques/.")
+                hull = load_hull_stl(stl.value, unit.value, orientation.value)
+                hydro, _, _, _ = compute_hull_hydrostatics(hull, float(draft.value), {})
+                cg = np.asarray(hull.center_mass, dtype=float) if use_mesh_center.value else np.asarray([field.value for field in center], dtype=float)
+                state = SimpleNamespace(
+                    hull_mesh=hull,
+                    hydro=hydro,
+                    masses=SimpleNamespace(center_of_gravity=cg),
+                    settings=SimpleNamespace(waterline_tol=1e-8),
+                    wetted_surface_cache={},
+                )
+                if angle_max.value < angle_min.value:
+                    raise ValueError("La gite maximale doit etre superieure ou egale a la gite minimale.")
+                angles = np.arange(angle_min.value, angle_max.value + angle_step.value, angle_step.value)
+                if len(angles) == 0 or angles[-1] != angle_max.value:
+                    angles = np.append(angles[angles <= angle_max.value], angle_max.value)
+                areas = [direct_hull_wetted_surface_delta(1.0, deg_to_rad(float(phi)), state)[0] for phi in angles]
+                print(f"STL: {stl.value} | faces: {len(hull.faces)} | volume de reference: {hydro.volume_C:.6g} m3")
+                print(f"Surface droite de reference: {hydro.S_C:.6g} m2 | CG rotation: {cg}")
+                display(pd.DataFrame({"Gite [deg]": angles, "Surface mouillee [m2]": areas}))
+                fig = plt.figure(figsize=(13, 5))
+                ax_area = fig.add_subplot(1, 2, 1)
+                ax_3d = fig.add_subplot(1, 2, 2, projection="3d")
+                ax_area.plot(angles, areas, marker="o", label="Calcul direct sur STL")
+                ax_area.axhline(hydro.S_C, color="black", linestyle="--", label="Coque droite")
+                ax_area.set_xlabel("Gite [deg]")
+                ax_area.set_ylabel("Surface mouillee [m2]")
+                ax_area.set_title("Surface mouillee")
+                ax_area.grid(True, alpha=0.3)
+                ax_area.legend()
+
+                final_angle = float(angles[-1])
+                rotated = rotate_mesh_about_x(hull, cg, deg_to_rad(final_angle))
+                z_min = float(rotated.bounds[0, 2]) - 0.05 * max(float(rotated.extents[2]), 1e-6)
+                z_max = float(rotated.bounds[1, 2]) + 0.05 * max(float(rotated.extents[2]), 1e-6)
+                waterline_z, _ = find_waterline_for_target_volume(
+                    rotated, hydro.volume_C, (z_min, z_max), tol=1e-8,
+                )
+                face_step = max(1, int(np.ceil(len(rotated.faces) / 5000)))
+                faces = rotated.faces[::face_step]
+                triangles = rotated.vertices[faces]
+                hull_surface = Poly3DCollection(
+                    triangles, facecolor="#6aaed6", edgecolor="#24445c",
+                    linewidth=0.08, alpha=0.82,
+                )
+                ax_3d.add_collection3d(hull_surface)
+                x0, x1 = rotated.bounds[:, 0]
+                y0, y1 = rotated.bounds[:, 1]
+                pad_x = max((x1 - x0) * 0.08, 1e-3)
+                pad_y = max((y1 - y0) * 0.08, 1e-3)
+                xx, yy = np.meshgrid([x0 - pad_x, x1 + pad_x], [y0 - pad_y, y1 + pad_y])
+                ax_3d.plot_surface(xx, yy, np.full_like(xx, waterline_z), color="#28a9e0", alpha=0.28, shade=False)
+                ax_3d.set_xlim(x0 - pad_x, x1 + pad_x)
+                ax_3d.set_ylim(y0 - pad_y, y1 + pad_y)
+                ax_3d.set_zlim(float(rotated.bounds[0, 2]) - pad_y, float(rotated.bounds[1, 2]) + pad_y)
+                ax_3d.set_box_aspect((max(x1 - x0, 1e-3), max(y1 - y0, 1e-3), max(rotated.extents[2], 1e-3)))
+                ax_3d.set_xlabel("x [m]")
+                ax_3d.set_ylabel("y [m]")
+                ax_3d.set_zlabel("z [m]")
+                ax_3d.set_title(f"Gite finale: {final_angle:g} deg | niveau d'eau")
+                fig.tight_layout()
+                plt.show()
+            except Exception as exc:
+                print(f"Echec du test: {type(exc).__name__}: {exc}")
+
+    run.on_click(calculate)
+    return widgets.VBox([
+        widgets.HTML("<b>Test de rotation de la coque et de la surface mouillee STL</b>"),
+        widgets.HBox([stl, refresh_button]), unit, orientation, draft, use_mesh_center,
+        widgets.HBox(center), angle_min, angle_max, angle_step, run, output,
+    ])
 
 def rail_under_drag(heel_rad: float, R_r: float, R_rk: float) -> float:
     """Rail-under drag for heel above 30 degrees."""
